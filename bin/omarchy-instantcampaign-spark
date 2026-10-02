@@ -17,6 +17,9 @@
 # aggregate: counts, rates and campaign names. The endpoint itself never
 # returns contact data to an API client.
 set -o pipefail
+# Every file written here (tokens, key, cached numbers, curl errors) is the
+# user's alone.
+umask 077
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/instantcampaign"
 KEY_FILE="${INSTANTCAMPAIGN_API_KEY_FILE:-$CONFIG_DIR/api-key}"
@@ -80,9 +83,13 @@ refresh_oauth() {
     fi
     return 1
   fi
-  jq --argjson now "$(date +%s)" --argjson t "$json" \
-    '.access_token = $t.access_token | .refresh_token = ($t.refresh_token // .refresh_token) | .expires_at = ($now + ($t.expires_in // 3600))' \
-    "$TOKEN_FILE" > "$TOKEN_FILE.tmp" && chmod 600 "$TOKEN_FILE.tmp" && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+  # The token response carries the new access and refresh tokens, so it reaches
+  # jq on stdin, never as an argument; the temp file is created private
+  # (umask 077) and renamed over the old one only once complete.
+  ( umask 077
+    jq --argjson now "$(date +%s)" --slurpfile t /dev/stdin \
+      '.access_token = $t[0].access_token | .refresh_token = ($t[0].refresh_token // .refresh_token) | .expires_at = ($now + ($t[0].expires_in // 3600))' \
+      "$TOKEN_FILE" <<<"$json" > "$TOKEN_FILE.tmp" ) && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE" || { rm -f "$TOKEN_FILE.tmp"; return 1; }
   KEY=$(jq -r '.access_token // ""' "$TOKEN_FILE"); [[ -n $KEY ]] || return 1
   AUTH_KIND="oauth"
 }
