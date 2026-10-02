@@ -1,0 +1,141 @@
+#!/bin/bash
+# The collector behind the InstantCampaign Spark bar widget.
+#
+#   omarchy-instantcampaign-spark setup              ask for an API key, store it, test it
+#   omarchy-instantcampaign-spark fetch [--days N] [--base-url URL]
+#                                                   call the MCP endpoint, write the state file
+#   omarchy-instantcampaign-spark status             print the state file
+#   omarchy-instantcampaign-spark open [page]        open the app in the browser
+#
+# The key lives in a file only the user can read and is handed to curl through
+# a config read from stdin, so it never appears on a command line or in the
+# process list. Everything written is aggregate: counts, rates and campaign
+# names. The endpoint itself never returns contact data to an API client.
+set -o pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/instantcampaign"
+KEY_FILE="${INSTANTCAMPAIGN_API_KEY_FILE:-$CONFIG_DIR/api-key}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/instantcampaign"
+STATE_FILE="$STATE_DIR/spark.json"
+BASE_URL="${INSTANTCAMPAIGN_URL:-https://instantcampaign.ai}"
+DAYS=7
+
+usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+
+fail_state() { # $1 kind, $2 message — written for the panel to show, then exit 1
+  mkdir -p "$STATE_DIR"
+  jq -n --arg kind "$1" --arg msg "$2" --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" \
+    '{fetchedAt: $at, baseUrl: $url, error: {kind: $kind, message: $msg}}' > "$STATE_FILE.tmp" \
+    && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+  echo "omarchy-instantcampaign-spark: $2" >&2
+  exit 1
+}
+
+read_key() {
+  if [[ -n ${INSTANTCAMPAIGN_API_KEY:-} ]]; then KEY="$INSTANTCAMPAIGN_API_KEY"; return; fi
+  [[ -r $KEY_FILE ]] || return 1
+  KEY=$(head -n1 "$KEY_FILE" | tr -d '[:space:]')
+  [[ -n $KEY ]]
+}
+
+# mcp <tool> <json-args>  → the tool's JSON result on stdout, or exit 1 with a
+# message on stderr. The key reaches curl via its config file on stdin.
+mcp() {
+  local tool="$1" args="${2:-{\}}" body response
+  body=$(jq -cn --arg t "$tool" --argjson a "$args" '{jsonrpc:"2.0", id:1, method:"tools/call", params:{name:$t, arguments:$a}}')
+  response=$(curl -sS --max-time 25 -K - -X POST "$BASE_URL/api/mcp" \
+      -H 'Content-Type: application/json' -H 'Accept: application/json' \
+      --data-binary "$body" -w '\n%{http_code}' <<<"header = \"Authorization: Bearer $KEY\"" 2>"$STATE_DIR/.curl.err") \
+    || { tr -d '\n' < "$STATE_DIR/.curl.err" | sed 's/^curl: ([0-9]*) //'; return 2; }
+  local code=${response##*$'\n'} json=${response%$'\n'*}
+  case "$code" in
+    401) echo "auth"; return 3 ;;
+    403) echo "scope"; return 3 ;;
+    200) ;;
+    *) echo "http $code"; return 2 ;;
+  esac
+  if jq -e '.result.isError == true' <<<"$json" >/dev/null 2>&1; then
+    jq -r '.result.content[0].text' <<<"$json"; return 4
+  fi
+  jq -e '.result.content[0].text | fromjson' <<<"$json" 2>/dev/null || { echo "unexpected reply"; return 2; }
+}
+
+call() { # $1 tool, $2 args, $3 var name — sets the var or fails the state
+  local out rc
+  out=$(mcp "$1" "$2"); rc=$?
+  case $rc in
+    0) printf -v "$3" '%s' "$out" ;;
+    3) [[ $out == auth ]] && fail_state auth "InstantCampaign rejected the API key." \
+                          || fail_state scope "The API key lacks the 'mcp' scope." ;;
+    4) fail_state tool "$1: $out" ;;
+    *) fail_state network "Could not reach $BASE_URL${out:+: $out}" ;;
+  esac
+}
+
+cmd_fetch() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --days) DAYS="$2"; shift 2 ;;
+      --base-url) BASE_URL="${2%/}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ $DAYS =~ ^[0-9]+$ ]] || DAYS=7
+  mkdir -p "$STATE_DIR"
+  command -v curl >/dev/null && command -v jq >/dev/null || fail_state setup "curl and jq are required."
+  read_key || fail_state nokey "No API key yet. Run: $(basename "$0") setup"
+  local overview analytics deliverability web
+  call get_workspace_overview '{}' overview
+  call get_analytics_overview "{\"days\":$DAYS}" analytics
+  call get_deliverability_status '{}' deliverability
+  call get_web_analytics "{\"days\":$DAYS}" web
+  mkdir -p "$STATE_DIR"
+  jq -n --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" --argjson days "$DAYS" \
+    --argjson overview "$overview" --argjson analytics "$analytics" \
+    --argjson deliverability "$deliverability" --argjson web "$web" \
+    '{fetchedAt: $at, baseUrl: $url, days: $days, overview: $overview, analytics: $analytics, deliverability: $deliverability, web: $web}' \
+    > "$STATE_FILE.tmp" && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+  echo "ok: $STATE_FILE"
+}
+
+cmd_setup() {
+  echo "InstantCampaign Spark needs an API key with the 'mcp' scope."
+  echo "Create one at $BASE_URL/settings/api-keys, then paste it here."
+  echo
+  local key
+  if command -v gum >/dev/null; then
+    key=$(gum input --password --placeholder "ic_..." --header "API key") || exit 1
+  else
+    read -r -s -p "API key: " key; echo
+  fi
+  key=$(tr -d '[:space:]' <<<"$key")
+  [[ -n $key ]] || { echo "Nothing entered."; exit 1; }
+  mkdir -p "$CONFIG_DIR"; chmod 700 "$CONFIG_DIR"
+  (umask 077; printf '%s\n' "$key" > "$KEY_FILE")
+  echo "Saved to $KEY_FILE (mode 600)."
+  echo "Testing..."
+  if cmd_fetch --days 7 --base-url "$BASE_URL"; then
+    echo "Connected. The bar updates within a few seconds."
+  else
+    echo "The key was saved but the test failed; see the message above."
+    exit 1
+  fi
+}
+
+cmd_open() {
+  local page="${1:-analytics}"
+  case "$page" in
+    analytics|deliverability|campaigns|settings/api-keys) ;;
+    *) page="analytics" ;;
+  esac
+  omarchy-launch-browser "$BASE_URL/$page" 2>/dev/null || xdg-open "$BASE_URL/$page"
+}
+
+case "${1:-}" in
+  fetch) shift; cmd_fetch "$@" ;;
+  setup) shift; while [[ $# -gt 0 ]]; do [[ $1 == --base-url ]] && BASE_URL="${2%/}"; shift; done; cmd_setup ;;
+  status) [[ -f $STATE_FILE ]] && cat "$STATE_FILE" || echo "no state yet" ;;
+  open) shift; [[ ${1:-} == --base-url ]] && { BASE_URL="${2%/}"; shift 2; }; cmd_open "$@" ;;
+  -h|--help|"") usage ;;
+  *) echo "unknown command: $1" >&2; usage; exit 1 ;;
+esac

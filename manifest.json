@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "instantcampaign.spark",
+  "name": "InstantCampaign Spark",
+  "version": "0.1.0",
+  "author": "Cloud First Consulting",
+  "license": "MIT",
+  "description": "Live email and website analytics from your InstantCampaign workspace in the Omarchy bar: sends, open and click rates with their trend, recent campaigns, sending-domain health and warm-up, and website traffic. Read-only, over the InstantCampaign MCP endpoint with an API key you keep in a file only you can read.",
+  "homepage": "https://github.com/Cloud-First-Consulting/omarchy-instantcampaign-spark",
+  "kinds": ["bar-widget"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "InstantCampaign",
+    "description": "One envelope in the bar, lit when a sending domain needs attention, and a panel with the last week's email and web numbers.",
+    "category": "Productivity",
+    "aliases": ["instantcampaign", "spark", "email-analytics"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 300,
+      "days": "7",
+      "baseUrl": "https://instantcampaign.ai"
+    },
+    "schema": [
+      { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 60, "max": 3600, "step": 60, "defaultValue": 300 },
+      { "key": "days", "type": "enum", "label": "Period", "options": ["7", "30", "90"], "defaultValue": "7", "description": "How many days the numbers cover. Each period is compared with the one before it." },
+      { "key": "baseUrl", "type": "string", "label": "InstantCampaign URL", "defaultValue": "https://instantcampaign.ai", "description": "Only change this for a self-hosted InstantCampaign." }
+    ]
+  }
+}
