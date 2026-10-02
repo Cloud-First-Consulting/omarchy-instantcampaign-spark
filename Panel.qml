@@ -46,6 +46,8 @@ Panel {
   property double nowMs: Date.now()
 
   readonly property var err: snapshot && snapshot.error ? snapshot.error : null
+  readonly property string authKind: snapshot && snapshot.auth ? String(snapshot.auth) : ""
+  readonly property bool signingIn: !!err && err.kind === "pending"
   readonly property var overview: snapshot && snapshot.overview ? snapshot.overview : null
   readonly property var analytics: snapshot && snapshot.analytics ? snapshot.analytics : null
   readonly property var cur: analytics && analytics.current ? analytics.current : null
@@ -73,7 +75,7 @@ Panel {
     }
     return out
   }
-  readonly property bool alarming: troubledDomains.length > 0 || (!!err && err.kind !== "nokey")
+  readonly property bool alarming: troubledDomains.length > 0 || (!!err && err.kind !== "nokey" && err.kind !== "pending")
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
 
@@ -82,7 +84,8 @@ Panel {
     if (err) {
       switch (err.kind) {
         case "nokey": return "not connected"
-        case "auth": return "key rejected"
+        case "pending": return "signing in"
+        case "auth": return authKind === "oauth" ? "signed out" : "key rejected"
         case "scope": return "no mcp scope"
         case "network": return "offline"
         default: return "error"
@@ -102,7 +105,7 @@ Panel {
     if (!overview || !overview.counts) return ""
     var c = overview.counts
     return Model.num(c.contacts) + " contacts · " + Model.num(c.campaigns) + " campaigns · "
-         + Model.num(c.contactLists) + " lists · " + Model.num(c.segments) + " segments"
+         + Model.num(c.contactLists) + " lists · " + (authKind === "oauth" ? "signed in" : "API key")
   }
 
   function refreshNow() {
@@ -114,6 +117,16 @@ Panel {
 
   function openApp(page) {
     if (bar) bar.run("'" + collector + "' open --base-url '" + baseUrl + "' " + (page || "analytics"))
+  }
+
+  function signIn() {
+    if (!bar) return
+    bar.run("'" + collector + "' login --base-url '" + baseUrl + "' --days " + days)
+  }
+
+  function signOut() {
+    if (!bar) return
+    bar.run("'" + collector + "' logout")
   }
 
   function runSetup() {
@@ -166,6 +179,8 @@ Panel {
     function close(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { root.refreshNow(); return "ok" }
+    function login(): string { root.signIn(); return "ok" }
+    function logout(): string { root.signOut(); return "ok" }
   }
 
   // ---- Bar ----
@@ -209,6 +224,8 @@ Panel {
         else if (t === "o" || t === "O") root.openApp(root.hasData ? "analytics" : "settings/api-keys")
         else if (t === "d" || t === "D") root.openApp("deliverability")
         else if (t === "c" || t === "C") root.openApp("campaigns")
+        else if (t === "s" || t === "S") { if (!root.hasData) root.signIn() }
+        else if (t === "x" || t === "X") { if (root.authKind === "oauth") root.signOut() }
       }
 
       Flickable {
@@ -283,18 +300,76 @@ Panel {
 
           // ---------- Not connected ----------
           Column {
-            visible: !root.hasData && (!root.err || root.err.kind === "nokey" || root.err.kind === "auth" || root.err.kind === "scope")
+            visible: !root.hasData && (!root.err || root.err.kind === "nokey" || root.err.kind === "pending" || root.err.kind === "auth" || root.err.kind === "scope")
             width: parent.width
             spacing: Style.space(10)
 
             Text {
               width: parent.width
-              text: root.err && root.err.kind !== "nokey"
-                    ? "The stored API key did not work. Make a new one with the mcp scope and run setup again."
-                    : "Connect this widget to your workspace with an API key that has the mcp scope. Setup asks for the key once and keeps it in a file only you can read."
+              text: root.signingIn
+                    ? "A browser tab is open. Log in, pick the workspace and approve; this panel updates by itself."
+                    : root.err && root.err.kind === "auth" && root.authKind === "oauth"
+                    ? "Your sign-in has expired or was revoked. Sign in again to reconnect."
+                    : root.err && root.err.kind !== "nokey"
+                    ? "The stored API key did not work. Sign in instead, or make a new key with the mcp scope."
+                    : "Connect this widget to your workspace. Signing in opens the browser once; nothing to copy."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              spacing: Style.space(8)
+              PanelActionButton {
+                iconText: root.signingIn ? "󰔟" : "󰍂"
+                tooltipText: "Sign in with InstantCampaign (s)"
+                foreground: root.accent
+                fontFamily: root.fontFamily
+                bordered: true
+                enabled: !root.signingIn
+                onClicked: root.signIn()
+              }
+              // Positioners refuse anchored children, so the click target wraps
+              // the column instead of sitting inside it.
+              Item {
+                anchors.verticalCenter: parent.verticalCenter
+                implicitWidth: signInLabels.implicitWidth
+                implicitHeight: signInLabels.implicitHeight
+                Column {
+                  id: signInLabels
+                  spacing: Style.space(1)
+                  Text {
+                    text: root.signingIn ? "Waiting for the browser…" : "Sign in with InstantCampaign"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    font.bold: !root.signingIn
+                  }
+                  Text {
+                    text: root.signingIn ? "takes up to five minutes, then gives up" : "recommended · opens " + root.baseUrl.replace(/^https?:\/\//, "")
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+                MouseArea {
+                  anchors.fill: parent
+                  enabled: !root.signingIn
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.signIn()
+                }
+              }
+            }
+
+            PanelSeparator { width: parent.width; foreground: root.foreground }
+
+            Text {
+              width: parent.width
+              text: "Or use an API key with the mcp scope. Setup asks for it once and keeps it in a file only you can read."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
               wrapMode: Text.WordWrap
             }
 
@@ -310,7 +385,7 @@ Panel {
               }
               Text {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Set up in a terminal"
+                text: "Set up with an API key in a terminal"
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -331,24 +406,27 @@ Panel {
                 bordered: true
                 onClicked: root.openApp("settings/api-keys")
               }
-              Column {
-                id: keyPageLink
+              Item {
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(1)
-                Text {
-                  text: "Create a key in InstantCampaign"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
+                implicitWidth: keyPageLabels.implicitWidth
+                implicitHeight: keyPageLabels.implicitHeight
+                Column {
+                  id: keyPageLabels
+                  spacing: Style.space(1)
+                  Text {
+                    text: "Create a key in InstantCampaign"
+                    color: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                  }
+                  Text {
+                    text: root.baseUrl.replace(/^https?:\/\//, "") + "/settings/api-keys"
+                    color: root.accent
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.underline: keyPageMouse.containsMouse
+                  }
                 }
-                Text {
-                  text: root.baseUrl.replace(/^https?:\/\//, "") + "/settings/api-keys"
-                  color: root.accent
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.underline: keyPageMouse.containsMouse
-                }
-                // The words are the link too, not only the button beside them.
                 MouseArea {
                   id: keyPageMouse
                   anchors.fill: parent
@@ -357,15 +435,6 @@ Panel {
                   onClicked: root.openApp("settings/api-keys")
                 }
               }
-            }
-
-            Text {
-              width: parent.width
-              text: "Log in with your usual account; the key needs the mcp scope and nothing else."
-              color: root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
             }
           }
 
@@ -578,7 +647,9 @@ Panel {
 
           Text {
             width: parent.width
-            text: root.hasData ? "r refresh · o analytics · c campaigns · d deliverability" : "r retry · o open the key page"
+            text: root.hasData
+                  ? "r refresh · o analytics · c campaigns · d deliverability" + (root.authKind === "oauth" ? " · x sign out" : "")
+                  : "s sign in · r retry · o open the key page"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

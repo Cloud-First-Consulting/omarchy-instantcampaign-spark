@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Sign in to InstantCampaign from the desktop (OAuth 2.1, public client, PKCE).
+
+Called by omarchy-instantcampaign-spark; not meant to be run by hand, though it
+can be. Steps: register this installation as a dynamic public client (RFC 7591,
+reused on repeat), open the consent page in the browser, catch the redirect on a
+loopback port, exchange the code (RFC 7636 S256) and write the token file.
+
+Nothing here reads workspace data. The only state it keeps is the token file,
+written with mode 600, and the client id it was given.
+"""
+import base64, hashlib, http.server, json, os, secrets, subprocess, sys, time, urllib.parse, urllib.request, urllib.error
+
+BASE = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("INSTANTCAMPAIGN_URL", "https://instantcampaign.ai")).rstrip("/")
+TOKEN_FILE = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser("~/.config/instantcampaign/oauth.json")
+PORTS = (48217, 48218, 48219, 48220)          # loopback callback: fixed because the server matches the full URI
+SOFTWARE_ID = "omarchy-instantcampaign-spark"
+SCOPE = "mcp"
+TIMEOUT_S = 300
+
+def say(msg): print(msg, file=sys.stderr, flush=True)
+
+def post(url, data, form=True):
+    body = urllib.parse.urlencode(data).encode() if form else json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/x-www-form-urlencoded" if form else "application/json",
+        "Accept": "application/json", "User-Agent": "omarchy-instantcampaign-spark"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        try: return e.code, json.loads(e.read() or b"{}")
+        except Exception: return e.code, {}
+
+def free_port():
+    import socket
+    for p in PORTS:
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", p)); s.close(); return p
+        except OSError:
+            s.close()
+    return None
+
+def load_tokens():
+    try:
+        with open(TOKEN_FILE) as f: return json.load(f)
+    except Exception: return {}
+
+def save_tokens(d):
+    os.makedirs(os.path.dirname(TOKEN_FILE), mode=0o700, exist_ok=True)
+    tmp = TOKEN_FILE + ".tmp"
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: json.dump(d, f, indent=2)
+    os.replace(tmp, TOKEN_FILE)
+
+def register(redirect_uri, previous):
+    # Same software_id + same redirect set gives the same client id back, so a
+    # reinstall does not fill the workspace's Connected apps with duplicates.
+    if previous.get("client_id") and previous.get("redirect_uri") == redirect_uri and previous.get("base_url") == BASE:
+        return previous["client_id"]
+    status, body = post(BASE + "/api/oauth/register", {
+        "client_name": "Omarchy Spark", "software_id": SOFTWARE_ID,
+        "redirect_uris": [redirect_uri], "token_endpoint_auth_method": "none",
+        "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+        "scope": SCOPE}, form=False)
+    if status not in (200, 201) or not body.get("client_id"):
+        raise SystemExit(f"registration failed: {status} {body.get('error_description') or body.get('error') or body}")
+    return body["client_id"]
+
+class Callback(http.server.BaseHTTPRequestHandler):
+    result = None
+    def log_message(self, *a): pass
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        if u.path != "/callback":
+            self.send_response(404); self.end_headers(); return
+        q = urllib.parse.parse_qs(u.query)
+        Callback.result = {k: v[0] for k, v in q.items()}
+        ok = "code" in q and q.get("state", [None])[0] == self.server.expected_state
+        page = ("<!doctype html><meta charset=utf-8><title>Omarchy Spark</title>"
+                "<body style='font-family:system-ui;background:#141317;color:#F2F0F4;display:grid;place-items:center;height:100vh;margin:0'>"
+                "<div style='text-align:center'><h1 style='color:#F06E9F'>" + ("Signed in" if ok else "Sign-in failed") + "</h1>"
+                "<p>" + ("You can close this tab. The bar updates in a moment." if ok else "Go back to the panel and try again.") + "</p></div>")
+        self.send_response(200); self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers()
+        self.wfile.write(page.encode())
+
+def main():
+    port = free_port()
+    if port is None: raise SystemExit("no loopback port free (48217-48220)")
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    previous = load_tokens()
+    client_id = register(redirect_uri, previous)
+
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).rstrip(b"=").decode()
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(24)
+    resource = BASE + "/api/mcp"
+    url = BASE + "/oauth/authorize?" + urllib.parse.urlencode({
+        "client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code", "scope": SCOPE,
+        "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "resource": resource})
+
+    server = http.server.HTTPServer(("127.0.0.1", port), Callback)
+    server.expected_state = state
+    server.timeout = 1
+    say("Opening the browser to sign in...")
+    try:
+        subprocess.Popen(["omarchy-launch-browser", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(url)   # stdout: the URL, so a caller can show it if the browser did not open
+
+    deadline = time.time() + TIMEOUT_S
+    while Callback.result is None and time.time() < deadline:
+        server.handle_request()
+    server.server_close()
+    res = Callback.result
+    if res is None: raise SystemExit("timed out waiting for the browser")
+    if res.get("state") != state: raise SystemExit("state mismatch; refusing the code")
+    if "error" in res: raise SystemExit(f"{res['error']}: {res.get('error_description', '')}".strip())
+
+    status, tok = post(BASE + "/api/oauth/token", {
+        "grant_type": "authorization_code", "code": res["code"], "redirect_uri": redirect_uri,
+        "client_id": client_id, "code_verifier": verifier, "resource": resource})
+    if status != 200 or not tok.get("access_token"):
+        raise SystemExit(f"token exchange failed: {status} {tok.get('error_description') or tok.get('error') or tok}")
+    save_tokens({"base_url": BASE, "client_id": client_id, "redirect_uri": redirect_uri,
+                 "access_token": tok["access_token"], "refresh_token": tok.get("refresh_token"),
+                 "expires_at": int(time.time()) + int(tok.get("expires_in", 3600)),
+                 "scope": tok.get("scope", SCOPE), "signed_in_at": int(time.time())})
+    say("Signed in.")
+
+if __name__ == "__main__":
+    main()

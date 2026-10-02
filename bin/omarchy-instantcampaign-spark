@@ -1,41 +1,90 @@
 #!/bin/bash
 # The collector behind the InstantCampaign Spark bar widget.
 #
-#   omarchy-instantcampaign-spark setup              ask for an API key, store it, test it
+#   omarchy-instantcampaign-spark login [--base-url URL]
+#                                                   sign in with the browser (OAuth, no key to paste)
+#   omarchy-instantcampaign-spark logout             revoke the sign-in and forget its tokens
+#   omarchy-instantcampaign-spark setup              or: paste an API key, store it, test it
 #   omarchy-instantcampaign-spark fetch [--days N] [--base-url URL]
 #                                                   call the MCP endpoint, write the state file
 #   omarchy-instantcampaign-spark status             print the state file
 #   omarchy-instantcampaign-spark open [page]        open the app in the browser
 #
-# The key lives in a file only the user can read and is handed to curl through
-# a config read from stdin, so it never appears on a command line or in the
-# process list. Everything written is aggregate: counts, rates and campaign
-# names. The endpoint itself never returns contact data to an API client.
+# Credentials, in the order tried: $INSTANTCAMPAIGN_API_KEY, the API-key file,
+# then the OAuth token file written by `login` (refreshed here when it expires).
+# Each is handed to curl through a config read from stdin, so nothing secret
+# appears on a command line or in the process list. Everything written is
+# aggregate: counts, rates and campaign names. The endpoint itself never
+# returns contact data to an API client.
 set -o pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/instantcampaign"
 KEY_FILE="${INSTANTCAMPAIGN_API_KEY_FILE:-$CONFIG_DIR/api-key}"
+TOKEN_FILE="${INSTANTCAMPAIGN_TOKEN_FILE:-$CONFIG_DIR/oauth.json}"
+LOGIN_HELPER="$(dirname "$(readlink -f "$0")")/omarchy-instantcampaign-spark-login"
+AUTH_KIND=""
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/instantcampaign"
 STATE_FILE="$STATE_DIR/spark.json"
 BASE_URL="${INSTANTCAMPAIGN_URL:-https://instantcampaign.ai}"
 DAYS=7
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
 
 fail_state() { # $1 kind, $2 message — written for the panel to show, then exit 1
   mkdir -p "$STATE_DIR"
-  jq -n --arg kind "$1" --arg msg "$2" --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" \
-    '{fetchedAt: $at, baseUrl: $url, error: {kind: $kind, message: $msg}}' > "$STATE_FILE.tmp" \
+  jq -n --arg kind "$1" --arg msg "$2" --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" --arg auth "$AUTH_KIND" \
+    '{fetchedAt: $at, baseUrl: $url, auth: $auth, error: {kind: $kind, message: $msg}}' > "$STATE_FILE.tmp" \
     && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
   echo "omarchy-instantcampaign-spark: $2" >&2
   exit 1
 }
 
 read_key() {
-  if [[ -n ${INSTANTCAMPAIGN_API_KEY:-} ]]; then KEY="$INSTANTCAMPAIGN_API_KEY"; return; fi
-  [[ -r $KEY_FILE ]] || return 1
-  KEY=$(head -n1 "$KEY_FILE" | tr -d '[:space:]')
-  [[ -n $KEY ]]
+  if [[ -n ${INSTANTCAMPAIGN_API_KEY:-} ]]; then KEY="$INSTANTCAMPAIGN_API_KEY"; AUTH_KIND="api-key"; return; fi
+  if [[ -r $KEY_FILE ]]; then
+    KEY=$(head -n1 "$KEY_FILE" | tr -d '[:space:]')
+    [[ -n $KEY ]] && { AUTH_KIND="api-key"; return; }
+  fi
+  read_oauth
+}
+
+# The OAuth access token lasts an hour; the refresh token rotates on every use
+# and lasts 90 days from the last one. Refresh a minute early so a fetch never
+# races the expiry.
+read_oauth() {
+  [[ -r $TOKEN_FILE ]] || return 1
+  local base now exp
+  base=$(jq -r '.base_url // ""' "$TOKEN_FILE"); [[ $base == "$BASE_URL" ]] || return 1
+  now=$(date +%s); exp=$(jq -r '.expires_at // 0' "$TOKEN_FILE")
+  if (( exp - now > 60 )); then
+    KEY=$(jq -r '.access_token // ""' "$TOKEN_FILE"); [[ -n $KEY ]] || return 1
+    AUTH_KIND="oauth"; return 0
+  fi
+  refresh_oauth
+}
+
+refresh_oauth() {
+  local refresh client_id reply code json
+  refresh=$(jq -r '.refresh_token // ""' "$TOKEN_FILE"); client_id=$(jq -r '.client_id // ""' "$TOKEN_FILE")
+  [[ -n $refresh && -n $client_id ]] || return 1
+  reply=$(curl -sS --max-time 25 -K - -X POST "$BASE_URL/api/oauth/token" \
+      -H 'Accept: application/json' --data-urlencode "grant_type=refresh_token" \
+      --data-urlencode "client_id=$client_id" -w '\n%{http_code}' \
+      <<<"data-urlencode = \"refresh_token=$refresh\"" 2>/dev/null) || return 1
+  code=${reply##*$'\n'}; json=${reply%$'\n'*}
+  if [[ $code != 200 ]]; then
+    # A rotated-and-reused or revoked refresh token means the sign-in is over.
+    if jq -e '.error == "invalid_grant"' <<<"$json" >/dev/null 2>&1; then
+      rm -f "$TOKEN_FILE"; AUTH_KIND="oauth"
+      fail_state auth "Your sign-in has expired. Sign in again."
+    fi
+    return 1
+  fi
+  jq --argjson now "$(date +%s)" --argjson t "$json" \
+    '.access_token = $t.access_token | .refresh_token = ($t.refresh_token // .refresh_token) | .expires_at = ($now + ($t.expires_in // 3600))' \
+    "$TOKEN_FILE" > "$TOKEN_FILE.tmp" && chmod 600 "$TOKEN_FILE.tmp" && mv -f "$TOKEN_FILE.tmp" "$TOKEN_FILE"
+  KEY=$(jq -r '.access_token // ""' "$TOKEN_FILE"); [[ -n $KEY ]] || return 1
+  AUTH_KIND="oauth"
 }
 
 # mcp <tool> <json-args>  → the tool's JSON result on stdout, or exit 1 with a
@@ -83,7 +132,7 @@ cmd_fetch() {
   [[ $DAYS =~ ^[0-9]+$ ]] || DAYS=7
   mkdir -p "$STATE_DIR"
   command -v curl >/dev/null && command -v jq >/dev/null || fail_state setup "curl and jq are required."
-  read_key || fail_state nokey "No API key yet."
+  read_key || fail_state nokey "Not signed in yet."
   local overview analytics deliverability web
   call get_workspace_overview '{}' overview
   call get_analytics_overview "{\"days\":$DAYS}" analytics
@@ -93,13 +142,15 @@ cmd_fetch() {
   jq -n --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" --argjson days "$DAYS" \
     --argjson overview "$overview" --argjson analytics "$analytics" \
     --argjson deliverability "$deliverability" --argjson web "$web" \
-    '{fetchedAt: $at, baseUrl: $url, days: $days, overview: $overview, analytics: $analytics, deliverability: $deliverability, web: $web}' \
+    --arg auth "$AUTH_KIND" \
+    '{fetchedAt: $at, baseUrl: $url, days: $days, auth: $auth, overview: $overview, analytics: $analytics, deliverability: $deliverability, web: $web}' \
     > "$STATE_FILE.tmp" && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
   echo "ok: $STATE_FILE"
 }
 
 cmd_setup() {
-  echo "InstantCampaign Spark needs an API key with the 'mcp' scope."
+  echo "InstantCampaign Spark can also sign in through the browser: $(basename "$0") login"
+  echo "To use an API key instead, it needs the 'mcp' scope."
   echo "Create one at $BASE_URL/settings/api-keys, then paste it here."
   echo
   local key
@@ -122,6 +173,38 @@ cmd_setup() {
   fi
 }
 
+cmd_login() {
+  mkdir -p "$STATE_DIR"
+  command -v python3 >/dev/null || fail_state setup "python3 is required for sign-in; use setup with an API key instead."
+  # Tell the panel what is happening while the browser is open.
+  jq -n --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" \
+    '{fetchedAt: $at, baseUrl: $url, auth: "oauth", error: {kind: "pending", message: "Finish signing in in the browser."}}' \
+    > "$STATE_FILE.tmp" && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+  local err
+  if err=$(INSTANTCAMPAIGN_URL="$BASE_URL" "$LOGIN_HELPER" "$BASE_URL" "$TOKEN_FILE" 2>&1 >/dev/null); then
+    echo "Signed in."
+    cmd_fetch --days "$DAYS" --base-url "$BASE_URL"
+  else
+    AUTH_KIND="oauth"
+    fail_state auth "Sign-in failed: ${err##*$'\n'}"
+  fi
+}
+
+cmd_logout() {
+  if [[ -r $TOKEN_FILE ]]; then
+    local refresh client_id base
+    refresh=$(jq -r '.refresh_token // ""' "$TOKEN_FILE"); client_id=$(jq -r '.client_id // ""' "$TOKEN_FILE"); base=$(jq -r '.base_url // ""' "$TOKEN_FILE")
+    # RFC 7009: revoking the refresh token revokes the whole grant server-side,
+    # so Connected apps in the workspace shows it gone, not just this machine.
+    [[ -n $refresh && -n $client_id ]] && curl -sS --max-time 15 -K - -X POST "${base:-$BASE_URL}/api/oauth/revoke" \
+      --data-urlencode "client_id=$client_id" --data-urlencode "token_type_hint=refresh_token" \
+      <<<"data-urlencode = \"token=$refresh\"" >/dev/null 2>&1 || true
+    rm -f "$TOKEN_FILE"
+  fi
+  rm -f "$STATE_FILE"
+  echo "Signed out."
+}
+
 cmd_open() {
   local page="${1:-analytics}"
   case "$page" in
@@ -134,6 +217,8 @@ cmd_open() {
 case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
   setup) shift; while [[ $# -gt 0 ]]; do [[ $1 == --base-url ]] && BASE_URL="${2%/}"; shift; done; cmd_setup ;;
+  login) shift; while [[ $# -gt 0 ]]; do case "$1" in --base-url) BASE_URL="${2%/}"; shift 2 ;; --days) DAYS="$2"; shift 2 ;; *) shift ;; esac; done; cmd_login ;;
+  logout) cmd_logout ;;
   status) [[ -f $STATE_FILE ]] && cat "$STATE_FILE" || echo "no state yet" ;;
   open) shift; [[ ${1:-} == --base-url ]] && { BASE_URL="${2%/}"; shift 2; }; cmd_open "$@" ;;
   -h|--help|"") usage ;;
