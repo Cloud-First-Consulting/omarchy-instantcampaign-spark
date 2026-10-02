@@ -314,6 +314,11 @@ Panel {
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.runSetup()
+                }
               }
             }
             Row {
@@ -327,6 +332,7 @@ Panel {
                 onClicked: root.openApp("settings/api-keys")
               }
               Column {
+                id: keyPageLink
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(1)
                 Text {
@@ -340,6 +346,15 @@ Panel {
                   color: root.accent
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+                  font.underline: keyPageMouse.containsMouse
+                }
+                // The words are the link too, not only the button beside them.
+                MouseArea {
+                  id: keyPageMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.openApp("settings/api-keys")
                 }
               }
             }
