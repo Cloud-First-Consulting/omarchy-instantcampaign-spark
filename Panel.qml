@@ -225,7 +225,7 @@ Panel {
         else if (t === "d" || t === "D") root.openApp("deliverability")
         else if (t === "c" || t === "C") root.openApp("campaigns")
         else if (t === "s" || t === "S") { if (!root.hasData) root.signIn() }
-        else if (t === "x" || t === "X") { if (root.authKind === "oauth") root.signOut() }
+        else if (t === "x" || t === "X") { if (root.hasData) root.signOut() }
       }
 
       Flickable {
@@ -648,7 +648,7 @@ Panel {
           Text {
             width: parent.width
             text: root.hasData
-                  ? "r refresh · o analytics · c campaigns · d deliverability" + (root.authKind === "oauth" ? " · x sign out" : "")
+                  ? "r refresh · o analytics · c campaigns · d deliverability · x " + (root.authKind === "oauth" ? "sign out" : "forget key")
                   : "s sign in · r retry · o open the key page"
             color: root.dim
             font.family: root.fontFamily

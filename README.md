@@ -32,7 +32,9 @@ Then connect it to your workspace. Open the panel and click **Sign in with
 InstantCampaign** (or press `s`). A browser tab opens on instantcampaign.ai;
 log in, pick the workspace, approve, and the bar fills in by itself. Nothing to
 copy. Press `x` in the panel to sign out again, which also revokes the
-authorisation in the workspace's *Connected apps*.
+authorisation in the workspace's *Connected apps*. Disconnecting the app
+from the InstantCampaign side (Settings → Connected apps) works too: the next
+refresh notices and the panel goes back to "not connected".
 
 Prefer an API key? In InstantCampaign go to **Settings → API keys**, create a
 key with the **mcp** scope, and run:
@@ -43,7 +45,9 @@ key with the **mcp** scope, and run:
 
 The panel's "Set up with an API key" button does the same. Setup asks for the
 key once, stores it in `~/.config/instantcampaign/api-key` with mode 600, and
-tests it. An API key, when present, takes precedence over a sign-in.
+tests it. An API key, when present, takes precedence over a sign-in. Press
+`x` in the panel to forget the stored key; revoke the key itself under
+Settings → API keys in InstantCampaign.
 
 The widget refreshes every five minutes; change the interval, the period (7,
 30 or 90 days) or the URL of a self-hosted InstantCampaign in the widget's

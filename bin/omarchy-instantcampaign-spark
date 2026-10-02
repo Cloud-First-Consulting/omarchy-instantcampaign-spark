@@ -3,7 +3,7 @@
 #
 #   omarchy-instantcampaign-spark login [--base-url URL]
 #                                                   sign in with the browser (OAuth, no key to paste)
-#   omarchy-instantcampaign-spark logout             revoke the sign-in and forget its tokens
+#   omarchy-instantcampaign-spark logout             sign out: revoke the sign-in, forget any stored key
 #   omarchy-instantcampaign-spark setup              or: paste an API key, store it, test it
 #   omarchy-instantcampaign-spark fetch [--days N] [--base-url URL]
 #                                                   call the MCP endpoint, write the state file
@@ -204,6 +204,7 @@ cmd_login() {
 }
 
 cmd_logout() {
+  local forgot=()
   if [[ -r $TOKEN_FILE ]]; then
     local refresh client_id base
     refresh=$(jq -r '.refresh_token // ""' "$TOKEN_FILE"); client_id=$(jq -r '.client_id // ""' "$TOKEN_FILE"); base=$(jq -r '.base_url // ""' "$TOKEN_FILE")
@@ -212,10 +213,15 @@ cmd_logout() {
     [[ -n $refresh && -n $client_id ]] && curl -sS --max-time 15 -K - -X POST "${base:-$BASE_URL}/api/oauth/revoke" \
       --data-urlencode "client_id=$client_id" --data-urlencode "token_type_hint=refresh_token" \
       <<<"data-urlencode = \"token=$refresh\"" >/dev/null 2>&1 || true
-    rm -f "$TOKEN_FILE"
+    rm -f "$TOKEN_FILE"; forgot+=("the sign-in (revoked in the workspace too)")
+  fi
+  if [[ -f $KEY_FILE ]]; then
+    # An API key cannot be revoked from here; the key file is forgotten and
+    # the person is told where the key itself is switched off.
+    rm -f "$KEY_FILE"; forgot+=("the stored API key (revoke it under Settings → API keys if it is no longer needed)")
   fi
   rm -f "$STATE_FILE"
-  echo "Signed out."
+  if (( ${#forgot[@]} )); then printf 'Forgot %s.\n' "${forgot[@]}"; else echo "Nothing to sign out of."; fi
 }
 
 cmd_open() {
