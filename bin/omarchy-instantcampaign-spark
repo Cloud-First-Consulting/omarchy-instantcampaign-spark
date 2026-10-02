@@ -189,8 +189,12 @@ cmd_login() {
   jq -n --arg at "$(date -u +%FT%TZ)" --arg url "$BASE_URL" \
     '{fetchedAt: $at, baseUrl: $url, auth: "oauth", error: {kind: "pending", message: "Finish signing in in the browser."}}' \
     > "$STATE_FILE.tmp" && mv -f "$STATE_FILE.tmp" "$STATE_FILE"
+  # instantcampaign.ai knows this plugin as a registered app; anywhere else
+  # (a self-hosted InstantCampaign) the helper registers itself.
+  local client_id="${INSTANTCAMPAIGN_CLIENT_ID:-}"
+  [[ -z $client_id && $BASE_URL == "https://instantcampaign.ai" ]] && client_id="icapp_omarchy_spark"
   local err
-  if err=$(INSTANTCAMPAIGN_URL="$BASE_URL" "$LOGIN_HELPER" "$BASE_URL" "$TOKEN_FILE" 2>&1 >/dev/null); then
+  if err=$(INSTANTCAMPAIGN_URL="$BASE_URL" "$LOGIN_HELPER" "$BASE_URL" "$TOKEN_FILE" "$client_id" 2>&1 >/dev/null); then
     echo "Signed in."
     cmd_fetch --days "$DAYS" --base-url "$BASE_URL"
   else

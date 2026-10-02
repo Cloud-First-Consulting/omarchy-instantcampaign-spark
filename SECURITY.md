@@ -8,7 +8,8 @@
   `~/.config/instantcampaign/oauth.json` (both mode 600, directory 700). Each
   reaches `curl` through a config file read from stdin, never as an argument.
 - Sign-in (`bin/omarchy-instantcampaign-spark-login`, Python standard library only)
-  is OAuth 2.1 with a dynamically registered public client, PKCE S256, a `state`
+  is OAuth 2.1 with a public client (the one InstantCampaign registered for this
+  plugin, or a dynamically registered one on a self-hosted server), PKCE S256, a `state`
   check, and a loopback redirect bound to 127.0.0.1 that serves one static page
   and accepts a single callback. The refresh token rotates on every use; a reused
   or revoked one ends the session and deletes the token file. Logout revokes the

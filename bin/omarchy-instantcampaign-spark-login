@@ -2,9 +2,11 @@
 """Sign in to InstantCampaign from the desktop (OAuth 2.1, public client, PKCE).
 
 Called by omarchy-instantcampaign-spark; not meant to be run by hand, though it
-can be. Steps: register this installation as a dynamic public client (RFC 7591,
-reused on repeat), open the consent page in the browser, catch the redirect on a
-loopback port, exchange the code (RFC 7636 S256) and write the token file.
+can be. Steps: use the client InstantCampaign registered for this plugin (or,
+on a self-hosted server, register this installation as a dynamic public client,
+RFC 7591, reused on repeat), open the consent page in the browser, catch the
+redirect on a loopback port, exchange the code (RFC 7636 S256) and write the
+token file.
 
 Nothing here reads workspace data. The only state it keeps is the token file,
 written with mode 600, and the client id it was given.
@@ -13,6 +15,10 @@ import base64, hashlib, http.server, json, os, secrets, subprocess, sys, time, u
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("INSTANTCAMPAIGN_URL", "https://instantcampaign.ai")).rstrip("/")
 TOKEN_FILE = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser("~/.config/instantcampaign/oauth.json")
+# The client InstantCampaign registered for this plugin (seeded in the app), so
+# the consent page shows a reviewed app with its logo. A self-hosted
+# InstantCampaign without that row falls back to registering dynamically.
+FIXED_CLIENT_ID = sys.argv[3] if len(sys.argv) > 3 else os.environ.get("INSTANTCAMPAIGN_CLIENT_ID", "")
 PORTS = (48217, 48218, 48219, 48220)          # loopback callback: fixed because the server matches the full URI
 SOFTWARE_ID = "omarchy-instantcampaign-spark"
 SCOPE = "mcp"
@@ -54,6 +60,8 @@ def save_tokens(d):
     os.replace(tmp, TOKEN_FILE)
 
 def register(redirect_uri, previous):
+    if FIXED_CLIENT_ID:
+        return FIXED_CLIENT_ID
     # Same software_id + same redirect set gives the same client id back, so a
     # reinstall does not fill the workspace's Connected apps with duplicates.
     if previous.get("client_id") and previous.get("redirect_uri") == redirect_uri and previous.get("base_url") == BASE:

@@ -77,15 +77,15 @@ deliverability status and web analytics — and writes one JSON file under
 file. Credentials are passed to `curl` through its config on stdin, so they
 never appear on a command line.
 
-Sign-in is standard OAuth 2.1 for a native app: the plugin registers itself
-once as a public client (RFC 7591), uses PKCE S256, and receives the redirect
-on a loopback port (`127.0.0.1:48217`, or the next free of four). The access
-token lasts an hour and is refreshed silently; the refresh token rotates on
-every use and lasts 90 days from the last one. Tokens live in
-`~/.config/instantcampaign/oauth.json` with mode 600. Because the client is
-self-registered, the consent page shows an "Unverified app" notice; that is
-the server being honest about a client it did not pre-approve, not a warning
-about this plugin.
+Sign-in is standard OAuth 2.1 for a native app. On instantcampaign.ai the
+plugin uses the client InstantCampaign registered for it (`icapp_omarchy_spark`),
+so the consent page shows the reviewed app with its logo. On a self-hosted
+InstantCampaign it registers itself once as a public client (RFC 7591) and the
+consent page says so. Either way it uses PKCE S256 and receives the redirect on
+a loopback port (`127.0.0.1:48217`, or the next free of four). The access token
+lasts an hour and is refreshed silently; the refresh token rotates on every use
+and lasts 90 days from the last one. Tokens live in
+`~/.config/instantcampaign/oauth.json` with mode 600.
 
 Everything the widget receives is aggregate: counts, rates, campaign names and
 domain names. The InstantCampaign API never returns contact data to an API
