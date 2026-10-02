@@ -41,6 +41,13 @@ tests it. The widget refreshes every five minutes; change the interval, the
 period (7, 30 or 90 days) or the URL of a self-hosted InstantCampaign in the
 widget's settings in the Omarchy shell.
 
+## Links
+
+- Website and sign-in: https://instantcampaign.ai
+- Create an API key: https://instantcampaign.ai/settings/api-keys (scope: **mcp**)
+- Analytics the widget reads: https://instantcampaign.ai/analytics and https://instantcampaign.ai/deliverability
+- Help centre: https://docs.instantcampaign.ai
+
 ## Remove
 
 ```sh

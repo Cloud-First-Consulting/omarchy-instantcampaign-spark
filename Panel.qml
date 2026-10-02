@@ -206,7 +206,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refreshNow()
-        else if (t === "o" || t === "O") root.openApp("analytics")
+        else if (t === "o" || t === "O") root.openApp(root.hasData ? "analytics" : "settings/api-keys")
         else if (t === "d" || t === "D") root.openApp("deliverability")
         else if (t === "c" || t === "C") root.openApp("campaigns")
       }
@@ -326,13 +326,31 @@ Panel {
                 bordered: true
                 onClicked: root.openApp("settings/api-keys")
               }
-              Text {
+              Column {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Create a key in InstantCampaign"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
+                spacing: Style.space(1)
+                Text {
+                  text: "Create a key in InstantCampaign"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                }
+                Text {
+                  text: root.baseUrl.replace(/^https?:\/\//, "") + "/settings/api-keys"
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
+            }
+
+            Text {
+              width: parent.width
+              text: "Log in with your usual account; the key needs the mcp scope and nothing else."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
           }
 
@@ -531,7 +549,21 @@ Panel {
           Text {
             width: parent.width
             topPadding: Style.space(4)
-            text: root.hasData ? "r refresh · o analytics · c campaigns · d deliverability" : "r retry"
+            text: root.baseUrl.replace(/^https?:\/\//, "")
+            color: root.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            horizontalAlignment: Text.AlignHCenter
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.openApp(root.hasData ? "analytics" : "settings/api-keys")
+            }
+          }
+
+          Text {
+            width: parent.width
+            text: root.hasData ? "r refresh · o analytics · c campaigns · d deliverability" : "r retry · o open the key page"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
