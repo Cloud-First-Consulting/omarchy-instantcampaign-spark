@@ -629,6 +629,51 @@ Panel {
             }
           }
 
+          PanelSeparator { visible: root.hasData; width: parent.width; foreground: root.foreground }
+
+          // ---------- Account ----------
+          Column {
+            visible: root.hasData
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader { width: parent.width; text: "ACCOUNT"; foreground: root.foreground; fontFamily: root.fontFamily }
+
+            Text {
+              width: parent.width
+              text: root.authKind === "oauth"
+                    ? "Connected by signing in with the browser. Signing out also removes Omarchy Spark from the workspace's Connected apps."
+                    : "Connected with an API key. Forgetting it here only removes the local copy; revoke the key itself under Settings → API keys."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            ActionRow {
+              width: parent.width
+              icon: "󰍃"
+              label: root.authKind === "oauth" ? "Sign out" : "Forget the API key"
+              hint: root.authKind === "oauth" ? "x" : "x"
+              accent: root.urgent
+              onActivated: root.signOut()
+            }
+            ActionRow {
+              width: parent.width
+              icon: "󰏌"
+              label: "Open InstantCampaign"
+              hint: "o"
+              onActivated: root.openApp("analytics")
+            }
+            ActionRow {
+              width: parent.width
+              icon: "󰒃"
+              label: "Deliverability settings"
+              hint: "d"
+              onActivated: root.openApp("deliverability")
+            }
+          }
+
           // ---------- Footer ----------
           Text {
             width: parent.width
@@ -661,6 +706,65 @@ Panel {
   }
 
   // ---- Components ----
+
+
+  // A labelled action: icon button, the words, and the key that does the same.
+  // The whole row is the click target, not only the small button.
+  component ActionRow: Item {
+    id: actionRow
+    property string icon: ""
+    property string label: ""
+    property string hint: ""
+    property color accent: root.foreground
+    signal activated()
+    implicitHeight: Math.max(actionButton.implicitHeight, Style.space(28))
+
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.space(6)
+      color: rowMouse.containsMouse ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+    }
+    PanelActionButton {
+      id: actionButton
+      anchors.left: parent.left
+      anchors.verticalCenter: parent.verticalCenter
+      iconText: actionRow.icon
+      tooltipText: actionRow.label
+      foreground: actionRow.accent
+      fontFamily: root.fontFamily
+      bordered: true
+      onClicked: actionRow.activated()
+    }
+    Text {
+      anchors.left: actionButton.right
+      anchors.leftMargin: Style.space(10)
+      anchors.right: hintText.left
+      anchors.rightMargin: Style.space(8)
+      anchors.verticalCenter: parent.verticalCenter
+      text: actionRow.label
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+      elide: Text.ElideRight
+    }
+    Text {
+      id: hintText
+      anchors.right: parent.right
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: parent.verticalCenter
+      text: actionRow.hint
+      color: root.dim
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+    }
+    MouseArea {
+      id: rowMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: actionRow.activated()
+    }
+  }
 
   // A number with its label and the change against the previous period.
   component Kpi: Column {
