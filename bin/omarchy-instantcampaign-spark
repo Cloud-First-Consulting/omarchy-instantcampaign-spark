@@ -83,7 +83,7 @@ cmd_fetch() {
   [[ $DAYS =~ ^[0-9]+$ ]] || DAYS=7
   mkdir -p "$STATE_DIR"
   command -v curl >/dev/null && command -v jq >/dev/null || fail_state setup "curl and jq are required."
-  read_key || fail_state nokey "No API key yet. Run: $(basename "$0") setup"
+  read_key || fail_state nokey "No API key yet."
   local overview analytics deliverability web
   call get_workspace_overview '{}' overview
   call get_analytics_overview "{\"days\":$DAYS}" analytics
